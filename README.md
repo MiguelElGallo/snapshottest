@@ -1,8 +1,8 @@
 # snapshottest
 
-Learn **inline-snapshot** by testing a real weather CLI — no mocks, no fake data.
+A hands-on demo for [**inline-snapshot**](https://github.com/15r10nk/inline-snapshot) — the pytest plugin that writes your expected values for you.
 
-The tests call live APIs. You write **empty** `snapshot()` calls, and `inline-snapshot` fills in the expected values for you.
+Just run `./demo.sh` and see the full workflow in action: **create** snapshots from live API calls, **break** them with a new feature, and **fix** them in one command. No slides, no reading — one script, real understanding.
 
 ---
 
