@@ -3,10 +3,6 @@
 Learn **inline-snapshot** by building tests against real APIs.
 No mocks, no fake data — the tool discovers the expected values for you.
 
-> **Style note** — this tutorial follows the same progressive approach as the
-> [FastAPI Tutorial](https://fastapi.tiangolo.com/tutorial/).
-> Each section builds on the previous one.
-
 ---
 
 ## What you will build
@@ -15,7 +11,7 @@ A small CLI app that reports the weather for your current location.
 It uses two free APIs:
 
 | API | Purpose | Auth |
-|---|---|---|
+| --- | --- | --- |
 | [ip-api.com](http://ip-api.com) | IP geolocation (city, country, coordinates) | None |
 | [Open-Meteo](https://open-meteo.com) | Current weather (temperature, wind, conditions) | None |
 
@@ -317,7 +313,7 @@ uv run pytest tests/test_demo.py -v --inline-snapshot=create,fix
 - `fix` updates the broken snapshots (adds `"continent": "Europe"`)
 - `create` fills in the empty `test_summary` snapshot
 
-### Verify
+### Verify (Act 3)
 
 ```bash
 uv run pytest tests/test_demo.py -v
@@ -350,7 +346,7 @@ The script:
 ## Key `inline-snapshot` flags
 
 | Flag | Effect |
-|---|---|
+| --- | --- |
 | `--inline-snapshot=create` | Fill empty `snapshot()` calls with actual values |
 | `--inline-snapshot=fix` | Update broken snapshots to match current output |
 | `--inline-snapshot=create,fix` | Both at once |
