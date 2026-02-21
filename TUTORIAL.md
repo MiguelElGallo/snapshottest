@@ -357,7 +357,7 @@ The script:
 
 ## Project structure
 
-```
+```text
 snapshottest/
 ├── src/snapshottest/
 │   ├── models.py          # Location, Weather, WeatherReport
