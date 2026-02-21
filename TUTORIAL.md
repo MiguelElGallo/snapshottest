@@ -1,97 +1,55 @@
-# Inline Snapshot Testing — A Hands-On Tutorial
+# Inline Snapshot Testing — Tutorial
 
-You have a Python app that returns **structured data** — dictionaries, dataclasses, JSON blobs.
+Learn **inline-snapshot** by building tests against real APIs.
+No mocks, no fake data — the tool discovers the expected values for you.
 
-You want to write tests that check the **exact shape and values** of that data.
-
-But you **don't** want to  hand-type giant expected dictionaries into every `assert`.
-
-**`inline-snapshot`** does it for you. It writes the expected values *directly into your test source code* — and keeps them up to date when things change.
-
-Let's see how.
+> **Style note** — this tutorial follows the same progressive approach as the
+> [FastAPI Tutorial](https://fastapi.tiangolo.com/tutorial/).
+> Each section builds on the previous one.
 
 ---
 
-## What You'll Build
+## What you will build
 
-A small weather CLI that:
+A small CLI app that reports the weather for your current location.
+It uses two free APIs:
 
-1. Gets your **location** (latitude / longitude) from a free IP geolocation API.
-2. Gets the **current temperature** for that location from a free weather API.
-3. Displays the result in a pretty table.
+| API | Purpose | Auth |
+|---|---|---|
+| [ip-api.com](http://ip-api.com) | IP geolocation (city, country, coordinates) | None |
+| [Open-Meteo](https://open-meteo.com) | Current weather (temperature, wind, conditions) | None |
 
-Then you'll test it with `inline-snapshot` and see the full workflow:  **create → break → fix**.
-
----
-
-## Project Setup
-
-Create a new project with [UV](https://docs.astral.sh/uv/) and add the dependencies:
-
-```console
-$ uv init snapshottest --python 3.11
-$ cd snapshottest
-$ uv add httpx typer rich
-$ uv add --group dev inline-snapshot pytest ruff
-```
-
-Your `pyproject.toml` should look like this:
-
-```toml
-[project]
-name = "snapshottest"
-version = "0.1.0"
-requires-python = ">=3.11"
-dependencies = [
-    "httpx>=0.28.1",
-    "rich>=14.3.3",
-    "typer>=0.24.0",
-]
-
-[build-system]
-requires = ["setuptools>=68.0"]
-build-backend = "setuptools.build_meta"
-
-[dependency-groups]
-dev = [
-    "inline-snapshot>=0.32.2",
-    "pytest>=9.0.2",
-    "ruff>=0.15.2",
-]
-
-[tool.inline-snapshot]
-format-command = "ruff format --stdin-filename {filename}"
-```
-
-!!! tip
-    The `format-command` tells `inline-snapshot` to format the code it writes using **ruff**. This keeps the auto-generated snapshots consistent with your project style.
+The tests call these APIs for real.  `--inline-snapshot=create` fills in the
+expected values automatically — so you never type fake data by hand.
 
 ---
 
-## The Source Code
+## Prerequisites
 
-The project uses a `src/` layout:
+- Python 3.11+
+- [UV](https://docs.astral.sh/uv/) package manager
+- Internet connection (the tests call live APIs)
 
+---
+
+## Quick start
+
+```bash
+git clone <this-repo> && cd snapshottest
+uv sync
 ```
-src/snapshottest/
-├── __init__.py
-├── models.py
-├── location.py
-└── weather.py
-```
 
-### Models
+The project is already set up with all dependencies.
 
-Three simple dataclasses that carry data through the app:
+---
+
+## The source code
+
+### Models — `src/snapshottest/models.py`
+
+Three dataclasses that represent the domain:
 
 ```python
-# src/snapshottest/models.py
-from __future__ import annotations
-
-from dataclasses import dataclass, asdict
-from typing import Any
-
-
 @dataclass
 class Location:
     latitude: float
@@ -125,18 +83,13 @@ class WeatherReport:
         }
 ```
 
-### Location
+Each model has a `to_dict()` method so we can snapshot plain dictionaries.
 
-Uses [ip-api.com](http://ip-api.com) — free, no API key:
+### Location — `src/snapshottest/location.py`
+
+Calls [ip-api.com](http://ip-api.com/json/) to geolocate the machine's public IP:
 
 ```python
-# src/snapshottest/location.py
-import httpx
-from snapshottest.models import Location
-
-IP_API_URL = "http://ip-api.com/json/"
-
-
 def get_location() -> Location:
     response = httpx.get(
         IP_API_URL,
@@ -145,12 +98,7 @@ def get_location() -> Location:
     )
     response.raise_for_status()
     data = response.json()
-
-    if data.get("status") != "success":
-        raise RuntimeError(
-            f"Geolocation failed: {data.get('message', 'unknown error')}"
-        )
-
+    ...
     return Location(
         latitude=data["lat"],
         longitude=data["lon"],
@@ -159,18 +107,11 @@ def get_location() -> Location:
     )
 ```
 
-### Weather
+### Weather — `src/snapshottest/weather.py`
 
-Uses [Open-Meteo](https://open-meteo.com) — also free, no API key:
+Calls [Open-Meteo](https://open-meteo.com) for the current temperature, weather code, and wind speed:
 
 ```python
-# src/snapshottest/weather.py
-import httpx
-from snapshottest.models import Weather
-
-OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
-
-
 def get_temperature(latitude: float, longitude: float) -> Weather:
     response = httpx.get(
         OPEN_METEO_URL,
@@ -181,10 +122,7 @@ def get_temperature(latitude: float, longitude: float) -> Weather:
         },
         timeout=10,
     )
-    response.raise_for_status()
-    data = response.json()
-
-    current = data["current"]
+    ...
     return Weather(
         temperature_c=current["temperature_2m"],
         weather_code=current["weather_code"],
@@ -194,369 +132,264 @@ def get_temperature(latitude: float, longitude: float) -> Weather:
 
 ---
 
-## Step 1 — Write Tests with Empty Snapshots
+## Act 1 — Create snapshots
 
-Here's the key idea: you write your assertions with **empty `snapshot()` calls** and let the tool fill them in later.
+### Write the tests
 
-Create `tests/test_demo.py`:
+Create `tests/test_demo.py` with three tests.  Each one calls a **real** function
+and asserts against an **empty** `snapshot()`:
 
 ```python
-from unittest.mock import patch
 from inline_snapshot import snapshot
+
 from snapshottest.location import get_location
 from snapshottest.weather import get_temperature
-from snapshottest.models import Location, Weather, WeatherReport
 from snapshottest.cli import build_weather_report
 
 
-# Fake API responses — deterministic data for tests
-FAKE_IP_API_RESPONSE = {
-    "status": "success",
-    "city": "San Francisco",
-    "country": "United States",
-    "lat": 37.7749,
-    "lon": -122.4194,
-}
-
-FAKE_OPEN_METEO_RESPONSE = {
-    "current": {
-        "temperature_2m": 18.5,
-        "weather_code": 2,
-        "wind_speed_10m": 12.3,
-    }
-}
-
-
-class FakeHTTPResponse:
-    def __init__(self, data: dict) -> None:
-        self._data = data
-
-    def raise_for_status(self) -> None:
-        pass
-
-    def json(self) -> dict:
-        return self._data
-
-
 def test_get_location():
-    with patch(
-        "snapshottest.location.httpx.get",
-        return_value=FakeHTTPResponse(FAKE_IP_API_RESPONSE),
-    ):
-        location = get_location()
-
-    assert location.to_dict() == snapshot()  # 👈 empty!
+    location = get_location()
+    assert location.to_dict() == snapshot()
 
 
 def test_get_temperature():
-    with patch(
-        "snapshottest.weather.httpx.get",
-        return_value=FakeHTTPResponse(FAKE_OPEN_METEO_RESPONSE),
-    ):
-        weather = get_temperature(37.7749, -122.4194)
-
-    assert weather.to_dict() == snapshot()  # 👈 empty!
+    weather = get_temperature(60.17, 24.94)   # Helsinki coords
+    assert weather.to_dict() == snapshot()
 
 
 def test_build_weather_report():
-    fake_location = Location(
-        latitude=37.7749, longitude=-122.4194,
-        city="San Francisco", country="United States",
+    report = build_weather_report()
+    assert report.to_dict() == snapshot()
+```
+
+Notice: **you did not type any expected values**.  The `snapshot()` calls are
+completely empty.
+
+### Run the tests (no flags)
+
+```bash
+uv run pytest tests/test_demo.py -v
+```
+
+All three tests pass — but with warnings.  An empty `snapshot()` accepts any
+value, so there is nothing to compare against yet.
+
+### Fill in the snapshots
+
+```bash
+uv run pytest tests/test_demo.py -v --inline-snapshot=create
+```
+
+Open `tests/test_demo.py` again.  The empty `snapshot()` calls have been
+**rewritten in-place** with the actual data returned by the APIs:
+
+```python
+def test_get_location():
+    location = get_location()
+    assert location.to_dict() == snapshot(
+        {
+            "latitude": 60.1797,
+            "longitude": 24.9344,
+            "city": "Helsinki",
+            "country": "Finland",
+        }
     )
-    fake_weather = Weather(
-        temperature_c=18.5, weather_code=2, wind_speed_kmh=12.3,
-    )
-
-    with (
-        patch("snapshottest.cli.get_location", return_value=fake_location),
-        patch("snapshottest.cli.get_temperature", return_value=fake_weather),
-    ):
-        report = build_weather_report()
-
-    assert report.to_dict() == snapshot()  # 👈 empty!
-
-
-def test_weather_report_structure():
-    report = WeatherReport(
-        location=Location(
-            latitude=40.7128, longitude=-74.0060,
-            city="New York", country="United States",
-        ),
-        weather=Weather(
-            temperature_c=22.0, weather_code=0, wind_speed_kmh=8.5,
-        ),
-    )
-    data = report.to_dict()
-
-    assert data["location"]["city"] == snapshot()  # 👈 empty!
 ```
 
-Notice every `assert` ends with an **empty `snapshot()`**. You don't write expected values — you let the tool do it.
+> **Your values will differ** — they come from your IP and the current weather.
+> That's the whole point: *you* didn't write them, `inline-snapshot` discovered
+> them from the actual API responses.
 
-Now run the tests:
+### Verify
 
-```console
-$ uv run pytest tests/test_demo.py -v
+```bash
+uv run pytest tests/test_demo.py -v
 ```
 
-```
-tests/test_demo.py::test_get_location PASSED
-tests/test_demo.py::test_get_location ERROR
-tests/test_demo.py::test_get_temperature PASSED
-tests/test_demo.py::test_get_temperature ERROR
-tests/test_demo.py::test_build_weather_report PASSED
-tests/test_demo.py::test_build_weather_report ERROR
-tests/test_demo.py::test_weather_report_structure PASSED
-tests/test_demo.py::test_weather_report_structure ERROR
-
-4 passed, 4 errors in 0.08s
-```
-
-!!! warning
-    **4 passed.** Wait — the snapshots are *empty*! How can they pass?
-
-    An empty `snapshot()` with `==` passes silently. It accepts **any value**. The `ERROR` entries are warnings telling you that snapshot values are missing, but the tests themselves **don't fail**.
-
-    This is intentional — it lets you write and run tests immediately, then fill in the snapshots when you're ready.
+All tests pass cleanly — no warnings.
 
 ---
 
-## Step 2 — Create the Snapshots
+## Act 2 — Break the snapshots
 
-Now let `inline-snapshot` fill in the values by running with `--inline-snapshot=create`:
+Now you will add a feature: include the **continent** (e.g. "Europe") in the
+location data.  This changes the structure returned by `to_dict()`, which means
+the existing snapshots will no longer match.
 
-```console
-$ uv run pytest tests/test_demo.py -v --inline-snapshot=create
-```
+### Update the models
 
-```
-tests/test_demo.py::test_get_location PASSED
-tests/test_demo.py::test_get_temperature PASSED
-tests/test_demo.py::test_build_weather_report PASSED
-tests/test_demo.py::test_weather_report_structure PASSED
-
-──────────────────────── Create snapshots ────────────────────────
-╭──────────────────── tests/test_demo.py ────────────────────╮
-│ @@ -55,7 +55,14 @@                                        │
-│                                                            │
-│      assert location.to_dict() == snapshot(                │
-│ -        )                                                 │
-│ +        {                                                 │
-│ +            "latitude": 37.7749,                          │
-│ +            "longitude": -122.4194,                       │
-│ +            "city": "San Francisco",                      │
-│ +            "country": "United States",                   │
-│ +        }                                                 │
-│ +    )                                                     │
-│                                                            │
-│      assert weather.to_dict() == snapshot(                 │
-│ -        )                                                 │
-│ +        {"temperature_c": 18.5, ...}                      │
-│                                                            │
-│      assert report.to_dict() == snapshot(                  │
-│ -        )                                                 │
-│ +        {                                                 │
-│ +            "location": {                                 │
-│ +                "latitude": 37.7749,                      │
-│ +                ...                                       │
-│ +            },                                            │
-│ +            "weather": { ... },                           │
-│ +        }                                                 │
-│                                                            │
-│      assert data["location"]["city"] == snapshot(          │
-│ -        )                                                 │
-│ +        "New York"                                        │
-│ +    )                                                     │
-╰────────────────────────────────────────────────────────────╯
-
-4 passed in 0.08s
-```
-
-**`inline-snapshot` rewrote your test file.** Open `tests/test_demo.py` — the empty `snapshot()` calls are now filled:
+Add a `continent` field to `Location`, a `WMO_DESCRIPTIONS` dict, and a
+`summary()` method to `WeatherReport`:
 
 ```python
-# BEFORE (you wrote this)
-assert location.to_dict() == snapshot()
+# models.py  (changes highlighted)
 
-# AFTER (inline-snapshot wrote this)
-assert location.to_dict() == snapshot(
-    {
-        "latitude": 37.7749,
-        "longitude": -122.4194,
-        "city": "San Francisco",
-        "country": "United States",
-    }
+WMO_DESCRIPTIONS: dict[int, str] = {
+    0: "Clear sky",
+    1: "Mainly clear",
+    2: "Partly cloudy",
+    ...
+}
+
+
+@dataclass
+class Location:
+    latitude: float
+    longitude: float
+    city: str
+    country: str
+    continent: str          # <-- NEW
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+class WeatherReport:
+    ...
+
+    def summary(self) -> str:           # <-- NEW
+        description = WMO_DESCRIPTIONS.get(
+            self.weather.weather_code,
+            f"Code {self.weather.weather_code}",
+        )
+        return (
+            f"{self.weather.temperature_c}°C, {description} "
+            f"in {self.location.city}, {self.location.country}, "
+            f"{self.location.continent}"
+        )
+```
+
+### Update `get_location()`
+
+Request the `continent` field from ip-api.com and pass it to `Location`:
+
+```python
+# location.py  (changes highlighted)
+
+response = httpx.get(
+    IP_API_URL,
+    params={"fields": "status,message,city,country,continent,lat,lon"},  # <-- continent added
+    timeout=10,
+)
+...
+return Location(
+    latitude=data["lat"],
+    longitude=data["lon"],
+    city=data["city"],
+    country=data["country"],
+    continent=data["continent"],   # <-- NEW
 )
 ```
 
-Run the tests one more time to confirm everything is clean:
+### Add a test for `summary()`
 
-```console
-$ uv run pytest tests/test_demo.py -v
-```
-
-```
-tests/test_demo.py::test_get_location PASSED
-tests/test_demo.py::test_get_temperature PASSED
-tests/test_demo.py::test_build_weather_report PASSED
-tests/test_demo.py::test_weather_report_structure PASSED
-
-4 passed in 0.04s
-```
-
-!!! tip
-    The snapshots are **right there in your test file** — not in a separate `.snap` file or directory. You can read them, review them in PRs, and `git diff` them like any other code.
-
----
-
-## Step 3 — Break the Snapshots
-
-Now simulate a code change. Imagine the geolocation API starts returning a different city because the user moved. Update the fake data in `tests/test_demo.py`:
+Append to `tests/test_demo.py`:
 
 ```python
-# Change the fake response
-FAKE_IP_API_RESPONSE = {
-    "status": "success",
-    "city": "Los Angeles",           # was "San Francisco"
-    "country": "United States",
-    "lat": 34.0522,                  # was 37.7749
-    "lon": -118.2437,                # was -122.4194
-}
+def test_summary():
+    report = build_weather_report()
+    assert report.summary() == snapshot()
 ```
 
-Run the tests:
+### See what broke
 
-```console
-$ uv run pytest tests/test_demo.py -v --inline-snapshot=report
+```bash
+uv run pytest tests/test_demo.py -v --inline-snapshot=report
 ```
 
-```
-tests/test_demo.py::test_get_location FAILED
-tests/test_demo.py::test_get_temperature PASSED
-tests/test_demo.py::test_build_weather_report PASSED
-tests/test_demo.py::test_weather_report_structure PASSED
+`--inline-snapshot=report` is **read-only** — it shows you exactly what changed
+but does **not** modify any files.  You will see:
 
-──────────────────────── Fix snapshots ────────────────────────
-╭──────────────────── tests/test_demo.py ────────────────────╮
-│ @@ -60,9 +60,9 @@                                         │
-│                                                            │
-│      assert location.to_dict() == snapshot(                │
-│          {                                                 │
-│ -            "latitude": 37.7749,                          │
-│ -            "longitude": -122.4194,                       │
-│ -            "city": "San Francisco",                      │
-│ +            "latitude": 34.0522,                          │
-│ +            "longitude": -118.2437,                       │
-│ +            "city": "Los Angeles",                        │
-│              "country": "United States",                   │
-│          }                                                 │
-│      )                                                     │
-╰────────────────────────────────────────────────────────────╯
-These changes are not applied.
-Use --inline-snapshot=fix to apply them.
-
-FAILED tests/test_demo.py::test_get_location - AssertionError
-
-1 failed, 3 passed, 1 error in 0.12s
-```
-
-`inline-snapshot` tells you **exactly** what changed and shows you the diff. The test fails because the snapshot still says `"San Francisco"` but the code now produces `"Los Angeles"`.
-
-!!! info
-    Using `--inline-snapshot=report` shows the diff without modifying anything. This is great for CI — you can see what *would* change without actually changing files.
+- `test_get_location` and `test_build_weather_report` **fail**: their snapshots
+  are missing the new `"continent"` key.
+- `test_summary` has an empty `snapshot()` that needs filling.
 
 ---
 
-## Step 4 — Fix the Snapshots
+## Act 3 — Fix the snapshots
 
-You've reviewed the diff and the new values look correct. Update the snapshots automatically:
+One command handles **both** problems — broken snapshots **and** new empty ones:
 
-```console
-$ uv run pytest tests/test_demo.py -v --inline-snapshot=fix
+```bash
+uv run pytest tests/test_demo.py -v --inline-snapshot=create,fix
 ```
 
-```
-tests/test_demo.py::test_get_location PASSED
-tests/test_demo.py::test_get_temperature PASSED
-tests/test_demo.py::test_build_weather_report PASSED
-tests/test_demo.py::test_weather_report_structure PASSED
+- `fix` updates the broken snapshots (adds `"continent": "Europe"`)
+- `create` fills in the empty `test_summary` snapshot
 
-──────────────────────── Fix snapshots ────────────────────────
-╭──────────────────── tests/test_demo.py ────────────────────╮
-│ @@ -60,9 +60,9 @@                                         │
-│                                                            │
-│      assert location.to_dict() == snapshot(                │
-│          {                                                 │
-│ -            "latitude": 37.7749,                          │
-│ -            "longitude": -122.4194,                       │
-│ -            "city": "San Francisco",                      │
-│ +            "latitude": 34.0522,                          │
-│ +            "longitude": -118.2437,                       │
-│ +            "city": "Los Angeles",                        │
-│              "country": "United States",                   │
-│          }                                                 │
-│      )                                                     │
-╰────────────────────────────────────────────────────────────╯
-These changes will be applied, because you used fix
+### Verify
 
-4 passed, 1 error in 0.17s
+```bash
+uv run pytest tests/test_demo.py -v
 ```
 
-Run once more to confirm:
-
-```console
-$ uv run pytest tests/test_demo.py -v
-```
-
-```
-tests/test_demo.py::test_get_location PASSED
-tests/test_demo.py::test_get_temperature PASSED
-tests/test_demo.py::test_build_weather_report PASSED
-tests/test_demo.py::test_weather_report_structure PASSED
-
-4 passed in 0.04s
-```
-
-Clean. The snapshot in your test file now reads `"Los Angeles"` instead of `"San Francisco"`.
+All four tests pass.  Open `tests/test_demo.py` to see the updated snapshots —
+they now include the continent field and the summary string.
 
 ---
 
-## The Full Workflow
+## The interactive demo script
 
-Here's the `inline-snapshot` workflow at a glance:
+The repository includes `demo.sh` which walks through all three acts
+interactively.  It is idempotent — run it as many times as you like:
 
-| Step | Command | What happens |
-|------|---------|-------------|
-| **Write** | `assert x == snapshot()` | Empty snapshot — accepts any value |
-| **Create** | `pytest --inline-snapshot=create` | Fills in empty snapshots with actual values |
-| **Report** | `pytest --inline-snapshot=report` | Shows a diff of what would change (read-only) |
-| **Fix** | `pytest --inline-snapshot=fix` | Overwrites stale snapshots with new values |
-| **Review** | `pytest --inline-snapshot=review` | Interactive mode — accept/reject each change |
-
-!!! tip
-    In CI, use `--inline-snapshot=report` to detect snapshot drift without modifying files. If the report shows changes, fail the build and tell the developer to run `--inline-snapshot=fix` locally.
-
----
-
-## Why Inline Snapshots?
-
-- **No separate snapshot files.** The expected values live right in the `assert` statement, in the same file, on the same line. You read them in code review the same way you'd read any other assertion.
-
-- **No hand-typing giant dicts.** Write `snapshot()`, run `create`, done. The tool even formats the output with your project's formatter (ruff, black, etc.).
-
-- **Easy to update.** When your code changes, run `fix` and the snapshots update automatically. Review the `git diff` to make sure the changes make sense.
-
-- **Standard `assert`.** It's just `assert x == snapshot(...)`. No custom test runners, no magic. Works with plain pytest.
-
----
-
-## Running the Demo
-
-A shell script is included to walk through all four steps interactively:
-
-```console
-$ chmod +x demo.sh
-$ ./demo.sh
+```bash
+./demo.sh
 ```
 
-It will pause between each step so you can inspect the files and output.
+The script:
+
+1. **Resets** source files to the committed state (`git checkout HEAD`)
+2. **Act 1** — writes empty test file, runs `--inline-snapshot=create`
+3. **Act 2** — copies `demo/continent/` files over source, adds `test_summary`
+4. **Act 3** — runs `--inline-snapshot=create,fix`
+5. **Restores** source files on exit (via `trap`)
+
+---
+
+## Key `inline-snapshot` flags
+
+| Flag | Effect |
+|---|---|
+| `--inline-snapshot=create` | Fill empty `snapshot()` calls with actual values |
+| `--inline-snapshot=fix` | Update broken snapshots to match current output |
+| `--inline-snapshot=create,fix` | Both at once |
+| `--inline-snapshot=report` | Show diffs, change nothing (safe for CI) |
+| `--inline-snapshot=review` | Interactive accept/reject per snapshot |
+
+---
+
+## Project structure
+
+```
+snapshottest/
+├── src/snapshottest/
+│   ├── models.py          # Location, Weather, WeatherReport
+│   ├── location.py        # IP geolocation (ip-api.com)
+│   ├── weather.py         # Current weather (Open-Meteo)
+│   └── cli.py             # Typer CLI with Rich output
+├── tests/
+│   ├── conftest.py        # Network guard — skips tests when offline
+│   ├── test_demo.py       # 3 tests, real APIs, inline snapshots
+│   └── test_weather_report.py  # Error-path test (mocked)
+├── demo/
+│   └── continent/         # "After" source files for the feature step
+│       ├── models.py
+│       └── location.py
+├── demo.sh                # Interactive 3-act demo script
+├── TUTORIAL.md            # This file
+└── pyproject.toml
+```
+
+---
+
+## Why no mocks?
+
+Traditional snapshot tests mock the API and hardcode the response — but then the
+snapshot just echoes back the mock data you already typed.  The snapshot adds
+zero value.
+
+By calling **real APIs**, `--inline-snapshot=create` discovers values the
+developer never typed.  When the data model changes (like adding `continent`),
+the snapshots genuinely break, and `--inline-snapshot=fix` updates them from
+fresh API responses.  That is the workflow inline-snapshot was designed for.
