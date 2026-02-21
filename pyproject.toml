@@ -1,0 +1,31 @@
+[project]
+name = "snapshottest"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.28.1",
+    "rich>=14.3.3",
+    "typer>=0.24.0",
+]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project.scripts]
+snapshottest = "snapshottest.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[dependency-groups]
+dev = [
+    "inline-snapshot>=0.32.2",
+    "pytest>=9.0.2",
+    "ruff>=0.15.2",
+]
+
+[tool.inline-snapshot]
+format-command = "ruff format --stdin-filename {filename}"
